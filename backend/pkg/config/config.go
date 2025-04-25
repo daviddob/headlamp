@@ -38,11 +38,12 @@ type Config struct {
 	OidcClientSecret      string `koanf:"oidc-client-secret"`
 	OidcIdpIssuerURL      string `koanf:"oidc-idp-issuer-url"`
 	OidcScopes            string `koanf:"oidc-scopes"`
+	OidcUseAKSManaged     bool   `koanf:"oidc-use-aks-managed"`
 }
 
 func (c *Config) Validate() error {
 	if !c.InCluster && (c.OidcClientID != "" || c.OidcClientSecret != "" || c.OidcIdpIssuerURL != "") {
-		return errors.New(`oidc-client-id, oidc-client-secret, oidc-idp-issuer-url flags
+		return errors.New(`oidc-client-id, oidc-client-secret, oidc-idp-issuer-url, flags
 		are only meant to be used in inCluster mode`)
 	}
 
@@ -186,6 +187,7 @@ func flagset() *flag.FlagSet {
 	f.String("oidc-idp-issuer-url", "", "Identity provider issuer URL for OIDC")
 	f.String("oidc-scopes", "profile,email",
 		"A comma separated list of scopes needed from the OIDC provider")
+	f.Bool("oidc-use-aks-managed", false, "Setup oidc to pass through the access_token instead of the default id_token")
 
 	return f
 }

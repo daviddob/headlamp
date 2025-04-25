@@ -57,6 +57,7 @@ type HeadlampConfig struct {
 	oidcClientID          string
 	oidcClientSecret      string
 	oidcIdpIssuerURL      string
+	oidcUseAKSManaged     bool
 	baseURL               string
 	oidcScopes            []string
 	proxyURLs             []string
@@ -576,6 +577,17 @@ func createHeadlampHandler(config *HeadlampConfig) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		if config.oidcUseAKSManaged {
+			aksIssuerURL, err := convertIssuerForAKSManagedOIDC(config.oidcIdpIssuerURL)
+			if err != nil {
+				logger.Log(logger.LevelError, map[string]string{"idpIssuerURL": oidcAuthConfig.IdpIssuerURL},
+					err, "failed to convert issuer for AKS managed oidc")
+			} else {
+				ctx = oidc.InsecureIssuerURLContext(ctx, aksIssuerURL)
+			}
+		}
+
 		provider, err := oidc.NewProvider(ctx, oidcAuthConfig.IdpIssuerURL)
 		if err != nil {
 			logger.Log(logger.LevelError, map[string]string{"idpIssuerURL": oidcAuthConfig.IdpIssuerURL},
@@ -585,8 +597,12 @@ func createHeadlampHandler(config *HeadlampConfig) http.Handler {
 			return
 		}
 
+		validatorClientID := oidcAuthConfig.ClientID
+		if config.oidcUseAKSManaged {
+			validatorClientID = "6dae42f8-4368-4678-94ff-3960e28e3630"
+		}
 		oidcConfig := &oidc.Config{
-			ClientID: oidcAuthConfig.ClientID,
+			ClientID: validatorClientID,
 		}
 
 		verifier := provider.Verifier(oidcConfig)
@@ -652,10 +668,15 @@ func createHeadlampHandler(config *HeadlampConfig) http.Handler {
 				return
 			}
 
-			rawIDToken, ok := oauth2Token.Extra("id_token").(string)
+			tokenType := "id_token"
+			if config.oidcUseAKSManaged {
+				tokenType = "access_token"
+			}
+
+			rawIDToken, ok := oauth2Token.Extra(tokenType).(string)
 			if !ok {
-				logger.Log(logger.LevelError, nil, err, "no id_token field in oauth2 token")
-				http.Error(w, "No id_token field in oauth2 token.", http.StatusInternalServerError)
+				logger.Log(logger.LevelError, nil, err, fmt.Sprintf("no %s field in oauth2 token", tokenType))
+				http.Error(w, fmt.Sprintf("No %s field in oauth2 token.", tokenType), http.StatusInternalServerError)
 
 				return
 			}
@@ -1156,6 +1177,22 @@ func handleClusterAPI(c *HeadlampConfig, router *mux.Router) {
 			return
 		}
 	})
+}
+
+// Handle extracting the tenant id from the Issuer for AKS Managed
+// OIDC implementations and properly convert to the v1 issuerurl
+// This is required as azure uses a hardcoded clientID and issuer
+// for AKS OIDC.
+func convertIssuerForAKSManagedOIDC(input string) (string, error) {
+	// Regular expression to match a UUID
+	re := regexp.MustCompile(`[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}`)
+	match := re.FindString(input)
+
+	if match == "" {
+		return "", fmt.Errorf("tenant ID not found in input")
+	}
+
+	return fmt.Sprintf("https://sts.windows.net/%s/", match), nil
 }
 
 // Handle WebSocket connections that include token in Sec-WebSocket-Protocol
